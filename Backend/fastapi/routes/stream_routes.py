@@ -9,6 +9,7 @@ from Backend.helper.encrypt import decode_string
 from Backend.helper.exceptions import InvalidHash
 from Backend.helper.custom_dl import ByteStreamer
 from Backend.pyrofork.bot import StreamBot, work_loads, multi_clients
+from Backend.logger import LOGGER
 
 router = APIRouter(tags=["Streaming"])
 class_cache = {}
@@ -55,6 +56,27 @@ async def stream_handler(request: Request, id: str, name: str):
     )
 
 
+async def safe_generator_wrapper(generator, expected_length: int):
+    """
+    Wraps the generator to ensure we track actual bytes sent
+    and handle any early termination gracefully
+    """
+    total_sent = 0
+    try:
+        async for chunk in generator:
+            if chunk:
+                total_sent += len(chunk)
+                yield chunk
+    except Exception as e:
+        LOGGER.error(f"Error in stream generator: {e}")
+        # If we haven't sent all expected data, this will cause h11 error
+        # but at least we log it for debugging
+        raise
+    finally:
+        if total_sent != expected_length:
+            LOGGER.warning(f"Stream mismatch: sent {total_sent} bytes, expected {expected_length}")
+
+
 async def media_streamer(
     request: Request,
     chat_id: int,
@@ -95,7 +117,6 @@ async def media_streamer(
 
     headers = {
         "Content-Type": mime_type,
-        "Content-Length": str(req_length),
         "Content-Disposition": f'inline; filename="{file_name}"',
         "Accept-Ranges": "bytes",
         "Cache-Control": "public, max-age=3600, immutable",
@@ -105,13 +126,16 @@ async def media_streamer(
     
     if range_header:
         headers["Content-Range"] = f"bytes {from_bytes}-{until_bytes}/{file_size}"
+        # Wrap generator to track actual bytes sent
+        wrapped_body = safe_generator_wrapper(body, req_length)
         status_code = 206
     else:
+        wrapped_body = body
         status_code = 200
     
     return StreamingResponse(
         status_code=status_code,
-        content=body,
+        content=wrapped_body,
         headers=headers,
         media_type=mime_type,
     )
