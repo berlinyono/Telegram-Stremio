@@ -43,84 +43,70 @@ class ByteStreamer:
         
         media_session = None
         current_part = 1
+        total_yielded = 0
         
         try:
             media_session = await self.generate_media_session(client, file_id)
             if not media_session:
                 LOGGER.error("Failed to generate media session")
-                work_loads[index] -= 1
                 return
             
             location = await self.get_location(file_id)
             
-            # First request
-            r = await media_session.send(
-                raw.functions.upload.GetFile(
-                    location=location, 
-                    offset=offset, 
-                    limit=chunk_size
-                )
-            )
-            
-            if not isinstance(r, raw.types.upload.File):
-                LOGGER.error(f"Unexpected response type: {type(r)}")
-                return
-            
             while current_part <= part_count:
-                chunk = r.bytes
-                
-                if not chunk:
-                    LOGGER.warning(f"Empty chunk at part {current_part}/{part_count}")
-                    break
-                
-                # Apply cuts based on part number
-                if part_count == 1:
-                    # Single part - cut both ends
-                    yield chunk[first_part_cut:last_part_cut]
-                elif current_part == 1:
-                    # First part - cut beginning
-                    yield chunk[first_part_cut:]
-                elif current_part == part_count:
-                    # Last part - cut end
-                    yield chunk[:last_part_cut]
-                else:
-                    # Middle parts - no cuts
-                    yield chunk
-
-                current_part += 1
-                offset += chunk_size
-
-                # Don't request more data if we've sent all parts
-                if current_part > part_count:
-                    break
-                
-                # Request next chunk
                 try:
+                    # Request the chunk
                     r = await media_session.send(
                         raw.functions.upload.GetFile(
                             location=location, 
                             offset=offset, 
                             limit=chunk_size
-                        ),
+                        )
                     )
                     
                     if not isinstance(r, raw.types.upload.File):
-                        LOGGER.error(f"Unexpected response type in loop: {type(r)}")
+                        LOGGER.error(f"Unexpected response type: {type(r)}")
                         break
-                        
+                    
+                    chunk = r.bytes
+                    if not chunk:
+                        LOGGER.warning(f"Empty chunk at part {current_part}/{part_count}, offset {offset}")
+                        break
+                    
+                    # Apply cuts based on part number
+                    if part_count == 1:
+                        # Single part - cut both ends
+                        chunk_to_yield = chunk[first_part_cut:last_part_cut]
+                    elif current_part == 1:
+                        # First part - cut beginning only
+                        chunk_to_yield = chunk[first_part_cut:]
+                    elif current_part == part_count:
+                        # Last part - cut end only
+                        chunk_to_yield = chunk[:last_part_cut]
+                    else:
+                        # Middle parts - no cuts
+                        chunk_to_yield = chunk
+                    
+                    if chunk_to_yield:
+                        yield chunk_to_yield
+                        total_yielded += len(chunk_to_yield)
+                    
+                    current_part += 1
+                    offset += chunk_size
+                    
                 except Exception as e:
-                    LOGGER.error(f"Error fetching chunk at offset {offset}: {e}")
+                    LOGGER.error(f"Error fetching chunk at part {current_part}, offset {offset}: {e}")
                     break
                     
         except TimeoutError:
-            LOGGER.error(f"Timeout while streaming file, completed {current_part-1}/{part_count} parts")
+            LOGGER.error(f"Timeout while streaming file, yielded {total_yielded} bytes in {current_part-1}/{part_count} parts")
         except AttributeError as e:
             LOGGER.error(f"Attribute error in yield_file: {e}")
         except Exception as e:
             LOGGER.error(f"Unexpected error in yield_file: {e}", exc_info=True)
         finally:
             work_loads[index] -= 1
-            LOGGER.debug(f"Finished yielding file. Sent {current_part-1}/{part_count} parts")
+            LOGGER.debug(f"Finished yielding file. Sent {current_part-1}/{part_count} parts, {total_yielded} bytes")
 
     async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
         media_session = client.media_sessions.get(file_id.dc_id, None)
