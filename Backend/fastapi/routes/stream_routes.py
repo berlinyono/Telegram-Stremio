@@ -56,27 +56,6 @@ async def stream_handler(request: Request, id: str, name: str):
     )
 
 
-async def safe_generator_wrapper(generator, expected_length: int):
-    """
-    Wraps the generator to ensure we track actual bytes sent
-    and handle any early termination gracefully
-    """
-    total_sent = 0
-    try:
-        async for chunk in generator:
-            if chunk:
-                total_sent += len(chunk)
-                yield chunk
-    except Exception as e:
-        LOGGER.error(f"Error in stream generator: {e}")
-        # If we haven't sent all expected data, this will cause h11 error
-        # but at least we log it for debugging
-        raise
-    finally:
-        if total_sent != expected_length:
-            LOGGER.warning(f"Stream mismatch: sent {total_sent} bytes, expected {expected_length}")
-
-
 async def media_streamer(
     request: Request,
     chat_id: int,
@@ -104,7 +83,7 @@ async def media_streamer(
     first_part_cut = from_bytes - offset
     last_part_cut = (until_bytes % chunk_size) + 1
     req_length = until_bytes - from_bytes + 1
-    part_count = math.ceil(until_bytes / chunk_size) - math.floor(offset / chunk_size)
+    part_count = math.ceil((until_bytes + 1) / chunk_size) - math.floor(offset / chunk_size)
 
     body = tg_connect.yield_file(
         file_id, index, offset, first_part_cut, last_part_cut, part_count, chunk_size
@@ -126,16 +105,15 @@ async def media_streamer(
     
     if range_header:
         headers["Content-Range"] = f"bytes {from_bytes}-{until_bytes}/{file_size}"
-        # Wrap generator to track actual bytes sent
-        wrapped_body = safe_generator_wrapper(body, req_length)
+        headers["Content-Length"] = str(req_length)
         status_code = 206
     else:
-        wrapped_body = body
+        # For full file, don't set Content-Length
         status_code = 200
     
     return StreamingResponse(
         status_code=status_code,
-        content=wrapped_body,
+        content=body,
         headers=headers,
         media_type=mime_type,
     )
