@@ -4,7 +4,7 @@ from urllib.parse import unquote
 from Backend.config import Telegram
 from Backend import db, __version__
 import PTN
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 
 # --- Configuration ---
@@ -36,15 +36,17 @@ def convert_to_stremio_meta(item: dict) -> dict:
         "poster": item.get("poster") or "",
         "logo": item.get("logo") or "",
         "year": item.get("release_year"),
+        "releaseInfo": item.get("release_year"),
+        "imdb_id": item.get("imdb_id", ""),
+        "moviedb_id": item.get("tmdb_id", ""),
         "background": item.get("backdrop") or "",
         "genres": item.get("genres") or [],
         "imdbRating": item.get("rating") or "",
         "description": item.get("description") or "",
+        "cast": item.get("cast") or [],
+        "runtime": item.get("runtime") or "",
     }
 
-    cast_list = item.get("cast") or []
-    if cast_list:
-        meta["cast"] = cast_list[:5]
     return meta
 
 
@@ -233,13 +235,19 @@ async def get_meta(media_type: str, id: str):
         "poster": media.get("poster", ""),
         "logo": media.get("logo", ""),
         "background": media.get("backdrop", ""),
-        "imdb_id": media.get("imdb_id", "")
+        "imdb_id": media.get("imdb_id", ""),
+        "releaseInfo": media.get("release_year"),
+        "moviedb_id": media.get("tmdb_id", ""),
+        "cast": media.get("cast") or [],
+        "runtime": media.get("runtime") or "",
+
     }
 
     # --- Add Episodes ---
     if media_type == "series" and "seasons" in media:
 
-        current_release = datetime.now(timezone.utc).isoformat()
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+
         videos = []
 
         for season in sorted(media.get("seasons", []), key=lambda s: s.get("season_number")):
@@ -253,19 +261,12 @@ async def get_meta(media_type: str, id: str):
                     "season": season.get("season_number"),
                     "episode": episode.get("episode_number"),
                     "overview": episode.get("overview") or "No description available for this episode yet.",
-                    "released": episode.get("released") or current_release,
-                    "thumbnail": episode.get("episode_backdrop") or 
-                        "https://via.placeholder.com/1280x720/1a1a2e/eaeaea?text=No+Image",
+                    "released": episode.get("released") or yesterday,
+                    "thumbnail": episode.get("episode_backdrop") or "https://raw.githubusercontent.com/weebzone/Colab-Tools/refs/heads/main/no_episode_backdrop.png",
                     "imdb_id": episode.get("imdb_id") or media.get("imdb_id"),
                 })
 
         meta_obj["videos"] = videos
-
-    # --- Add cast ---
-    cast_list = media.get("cast") or []
-    if cast_list:
-        meta_obj["cast"] = cast_list[:10]
-
     return {"meta": meta_obj}
 
 
@@ -276,7 +277,9 @@ async def get_streams(media_type: str, id: str):
         base_id = parts[0]
         season_num = int(parts[1]) if len(parts) > 1 else None
         episode_num = int(parts[2]) if len(parts) > 2 else None
-        tmdb_id, db_index = map(int, base_id.split("-"))
+        tmdb_id_str, db_index_str = base_id.split("-")
+        tmdb_id, db_index = int(tmdb_id_str), int(db_index_str)
+
     except (ValueError, IndexError):
         raise HTTPException(status_code=400, detail="Invalid Stremio ID format")
 

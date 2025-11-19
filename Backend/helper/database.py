@@ -139,7 +139,10 @@ class Database:
 
             if len(results) >= page_size:
                 break
+
         return results, dbs_checked, total_count
+
+
 
     async def _move_document(
         self, collection_name: str, document: dict, old_db_index: int
@@ -190,6 +193,7 @@ class Database:
                 backdrop=metadata_info['backdrop'],
                 logo=metadata_info['logo'],
                 cast=metadata_info['cast'],
+                runtime=metadata_info['runtime'],
                 media_type=metadata_info['media_type'],
                 telegram=[QualityDetail(
                     quality=metadata_info['quality'],
@@ -213,6 +217,7 @@ class Database:
                 backdrop=metadata_info['backdrop'],
                 logo=metadata_info['logo'],
                 cast=metadata_info['cast'],
+                runtime=metadata_info['runtime'],
                 media_type=metadata_info['media_type'],
                 seasons=[Season(
                     season_number=metadata_info['season_number'],
@@ -240,9 +245,8 @@ class Database:
             LOGGER.error(f"Validation error: {e}")
             return None
 
+        imdb_id = movie_dict["imdb_id"]
         tmdb_id = movie_dict["tmdb_id"]
-        
-
         title = movie_dict["title"]
         release_year = movie_dict["release_year"]
         quality_to_update = movie_dict["telegram"][0]
@@ -257,9 +261,16 @@ class Database:
         
         for db_index in range(1, total_storage_dbs + 1):
             db_key = f"storage_{db_index}"
-            movie = await self.dbs[db_key]["movie"].find_one(
-                    {"title": title, "release_year": release_year}
-            )
+            movie = None
+            if imdb_id:
+                movie = await self.dbs[db_key]["movie"].find_one({"imdb_id": imdb_id})
+            if not movie and tmdb_id:
+                movie = await self.dbs[db_key]["movie"].find_one({"tmdb_id": tmdb_id})
+            if not movie and title and release_year:
+                movie = await self.dbs[db_key]["movie"].find_one({
+                    "title": title, 
+                    "release_year": release_year
+                })
             if movie:
                 existing_db_key = db_key
                 existing_db_index = db_index
@@ -321,10 +332,9 @@ class Database:
         except ValidationError as e:
             LOGGER.error(f"Validation error: {e}")
             return None
-
-        tmdb_id = tv_show_dict["tmdb_id"]
         
-
+        imdb_id = tv_show_dict.get("imdb_id")
+        tmdb_id = tv_show_dict.get("tmdb_id")
         title = tv_show_dict["title"]
         release_year = tv_show_dict["release_year"]
         current_db_key = f"storage_{self.current_db_index}"
@@ -336,9 +346,16 @@ class Database:
 
         for db_index in range(1, total_storage_dbs + 1):
             db_key = f"storage_{db_index}"
-            tv = await self.dbs[db_key]["tv"].find_one(
-                    {"title": title, "release_year": release_year}
-            )
+            tv = None
+            if imdb_id:
+                tv = await self.dbs[db_key]["tv"].find_one({"imdb_id": imdb_id})
+            if not tv and tmdb_id:
+                tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
+            if not tv and title and release_year:
+                tv = await self.dbs[db_key]["tv"].find_one({
+                    "title": title,
+                    "release_year": release_year
+                })
             if tv:
                 existing_db_key = db_key
                 existing_db_index = db_index
@@ -655,7 +672,6 @@ class Database:
                     return False
             raise
 
-    # Delete a Movie or Tvshow completely
     async def delete_document(self, media_type: str, tmdb_id: int, db_index: int) -> bool:
         db_key = f"storage_{db_index}"
 
@@ -698,8 +714,6 @@ class Database:
         LOGGER.info(f"No document found with tmdb_id {tmdb_id}.")
         return False
 
-
-    # Delete a specific quality from movie
     async def delete_movie_quality(self, tmdb_id: int, db_index: int, quality: str) -> bool:
         db_key = f"storage_{db_index}"
         movie = await self.dbs[db_key]["movie"].find_one({"tmdb_id": tmdb_id})
@@ -730,7 +744,6 @@ class Database:
         result = await self.dbs[db_key]["movie"].replace_one({"tmdb_id": tmdb_id}, movie)
         return result.modified_count > 0
 
-    # Delete a specific episode from a TV show
     async def delete_tv_episode(self, tmdb_id: int, db_index: int, season_number: int, episode_number: int) -> bool:
         db_key = f"storage_{db_index}"
         tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
@@ -767,7 +780,6 @@ class Database:
         result = await self.dbs[db_key]["tv"].replace_one({"tmdb_id": tmdb_id}, tv)
         return result.modified_count > 0
 
-    # Delete a whole season from a TV show
     async def delete_tv_season(self, tmdb_id: int, db_index: int, season_number: int) -> bool:
         db_key = f"storage_{db_index}"
         tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})
@@ -800,7 +812,6 @@ class Database:
         result = await self.dbs[db_key]["tv"].replace_one({"tmdb_id": tmdb_id}, tv)
         return result.modified_count > 0
 
-    # Delete a specific quality from a given TV episode
     async def delete_tv_quality(self, tmdb_id: int, db_index: int, season_number: int, episode_number: int, quality: str) -> bool:
         db_key = f"storage_{db_index}"
         tv = await self.dbs[db_key]["tv"].find_one({"tmdb_id": tmdb_id})

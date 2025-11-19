@@ -15,7 +15,7 @@ async def manual(client: Client, message: Message):
             Backend.USE_DEFAULT_ID = url
 
             await message.reply_text(
-                f"✅ <b>Default IMDB URL Set!</b>\n\n"
+                f"✅ <b>Default IMDB/TMDB URL Set!</b>\n\n"
                 f"Now the bot will use this URL for any files you send:\n"
                 f"<code>{Backend.USE_DEFAULT_ID}</code>\n\n"
                 f"<b>Instructions:</b>\n"
@@ -27,7 +27,7 @@ async def manual(client: Client, message: Message):
         else:
             Backend.USE_DEFAULT_ID = None
             await message.reply_text(
-                "✅ <b>Default IMDB URL Removed!</b>\n\n"
+                "✅ <b>Default IMDB/TMDB URL Removed!</b>\n\n"
                 "You can now manually upload files without linking to a default IMDB URL.",
                 quote=True,
                 parse_mode=enums.ParseMode.HTML
