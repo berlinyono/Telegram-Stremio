@@ -1,6 +1,6 @@
 import asyncio
 from pyrogram import utils, raw
-from pyrogram.errors import AuthBytesInvalid
+from pyrogram.errors import AuthBytesInvalid, FloodWait
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from pyrogram.session import Session, Auth
 from typing import Dict, Union
@@ -35,36 +35,44 @@ class ByteStreamer:
         current_part = 1
         location = await self.get_location(file_id)
         try:
-            r = await media_session.send(raw.functions.upload.GetFile(location=location, offset=offset, limit=chunk_size))
-            if isinstance(r, raw.types.upload.File):
-                while True:
-                    chunk = r.bytes
-                    if not chunk:
-                        break
-                    elif part_count == 1:
-                        yield chunk[first_part_cut:last_part_cut]
-                    elif current_part == 1:
-                        yield chunk[first_part_cut:]
-                    elif current_part == part_count:
-                        yield chunk[:last_part_cut]
-                    else:
-                        yield chunk
-
-                    current_part += 1
-                    offset += chunk_size
-
-                    if current_part > part_count:
-                        break
-                    
+            while True:
+                try:
                     r = await media_session.send(
                         raw.functions.upload.GetFile(
-                            location=location, offset=offset, limit=chunk_size
-                        ),
+                            location=location,
+                            offset=offset,
+                            limit=chunk_size
+                        )
                     )
+                except FloodWait as e:
+                    LOGGER.warning(f"FloodWait for {e.value} seconds while streaming part {current_part} with client {index}")
+                    await asyncio.sleep(e.value)
+                    continue
+
+                if not isinstance(r, raw.types.upload.File):
+                    break
+
+                chunk = r.bytes
+                if not chunk:
+                    break
+                elif part_count == 1:
+                    yield chunk[first_part_cut:last_part_cut]
+                elif current_part == 1:
+                    yield chunk[first_part_cut:]
+                elif current_part == part_count:
+                    yield chunk[:last_part_cut]
+                else:
+                    yield chunk
+
+                current_part += 1
+                offset += chunk_size
+
+                if current_part > part_count:
+                    break
         except (TimeoutError, AttributeError):
             pass
         finally:
-            LOGGER.debug("Finished yielding file with {current_part} parts.")
+            LOGGER.debug(f"Finished yielding file with {current_part} parts.")
             work_loads[index] -= 1
 
     async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
