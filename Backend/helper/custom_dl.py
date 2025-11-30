@@ -48,6 +48,9 @@ class ByteStreamer:
                     LOGGER.warning(f"FloodWait for {e.value} seconds while streaming part {current_part} with client {index}")
                     await asyncio.sleep(e.value)
                     continue
+                except Exception as e:
+                    LOGGER.error(f"Unexpected error while requesting file chunk (part {current_part}, client {index}): {e}")
+                    break
 
                 if not isinstance(r, raw.types.upload.File):
                     break
@@ -69,8 +72,13 @@ class ByteStreamer:
 
                 if current_part > part_count:
                     break
-        except (TimeoutError, AttributeError):
-            pass
+        except FloodWait as e:
+            LOGGER.warning(f"FloodWait escaped inner loop while streaming with client {index}, sleeping for {e.value} seconds")
+            await asyncio.sleep(e.value)
+        except (TimeoutError, AttributeError) as e:
+            LOGGER.error(f"Timeout/attribute error while streaming with client {index}: {e}")
+        except Exception as e:
+            LOGGER.error(f"Unhandled error in yield_file with client {index}: {e}")
         finally:
             LOGGER.debug(f"Finished yielding file with {current_part} parts.")
             work_loads[index] -= 1
