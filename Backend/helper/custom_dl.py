@@ -1,6 +1,6 @@
 import asyncio
 from pyrogram import utils, raw
-from pyrogram.errors import AuthBytesInvalid
+from pyrogram.errors import AuthBytesInvalid, FloodWait
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from pyrogram.session import Session, Auth
 from typing import Dict, Union
@@ -35,36 +35,52 @@ class ByteStreamer:
         current_part = 1
         location = await self.get_location(file_id)
         try:
-            r = await media_session.send(raw.functions.upload.GetFile(location=location, offset=offset, limit=chunk_size))
-            if isinstance(r, raw.types.upload.File):
-                while True:
-                    chunk = r.bytes
-                    if not chunk:
-                        break
-                    elif part_count == 1:
-                        yield chunk[first_part_cut:last_part_cut]
-                    elif current_part == 1:
-                        yield chunk[first_part_cut:]
-                    elif current_part == part_count:
-                        yield chunk[:last_part_cut]
-                    else:
-                        yield chunk
-
-                    current_part += 1
-                    offset += chunk_size
-
-                    if current_part > part_count:
-                        break
-                    
+            while True:
+                try:
                     r = await media_session.send(
                         raw.functions.upload.GetFile(
-                            location=location, offset=offset, limit=chunk_size
-                        ),
+                            location=location,
+                            offset=offset,
+                            limit=chunk_size
+                        )
                     )
-        except (TimeoutError, AttributeError):
-            pass
+                except FloodWait as e:
+                    LOGGER.warning(f"FloodWait for {e.value} seconds while streaming part {current_part} with client {index}")
+                    await asyncio.sleep(e.value)
+                    continue
+                except Exception as e:
+                    LOGGER.error(f"Unexpected error while requesting file chunk (part {current_part}, client {index}): {e}")
+                    break
+
+                if not isinstance(r, raw.types.upload.File):
+                    break
+
+                chunk = r.bytes
+                if not chunk:
+                    break
+                elif part_count == 1:
+                    yield chunk[first_part_cut:last_part_cut]
+                elif current_part == 1:
+                    yield chunk[first_part_cut:]
+                elif current_part == part_count:
+                    yield chunk[:last_part_cut]
+                else:
+                    yield chunk
+
+                current_part += 1
+                offset += chunk_size
+
+                if current_part > part_count:
+                    break
+        except FloodWait as e:
+            LOGGER.warning(f"FloodWait escaped inner loop while streaming with client {index}, sleeping for {e.value} seconds")
+            await asyncio.sleep(e.value)
+        except (TimeoutError, AttributeError) as e:
+            LOGGER.error(f"Timeout/attribute error while streaming with client {index}: {e}")
+        except Exception as e:
+            LOGGER.error(f"Unhandled error in yield_file with client {index}: {e}")
         finally:
-            LOGGER.debug("Finished yielding file with {current_part} parts.")
+            LOGGER.debug(f"Finished yielding file with {current_part} parts.")
             work_loads[index] -= 1
 
     async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
